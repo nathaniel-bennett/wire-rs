@@ -12,12 +12,24 @@ pub trait WireReadable: Sized {
     */
 }
 
+// Can contain both owned types and references. Useful for structs that have both byte buffers (&'a [u8]) and values (u16, i32, etc)
+pub trait CompWireReadable<'a>: Sized {
+    fn from_wire_comp<const E: bool>(curs: &mut WireCursor<'a>) -> Result<Self, WireError>;
+
+    // Add once try_from_fn is stabilized
+    /*
+    fn array_from_wire<const L: usize, const E: bool>(curs: &mut WireCursor<'_>) -> Result<[Self; L], WireError> {
+        std::array::try_from_fn(|_| { Self::from_wire::<E>(curs) })
+    }
+    */
+}
+
 pub trait PartWireReadable: Sized {
-    fn from_wire_partial<const T: usize, const E: bool>(curs: &mut WireCursor<'_>) -> Result<Self, WireError>;
+    fn from_wire_part<const L: usize, const E: bool>(curs: &mut WireCursor<'_>) -> Result<Self, WireError>;
 }
 
 pub trait RefWireReadable {
-    fn ref_from_wire<'a>(curs: &mut WireCursor<'a>, size: usize) -> Result<&'a Self, WireError>;
+    fn from_wire_ref<'a>(curs: &mut WireCursor<'a>, size: usize) -> Result<&'a Self, WireError>;
 }
 
 pub trait VectoredReadable: Sized {
@@ -31,11 +43,11 @@ pub trait VectoredReadable: Sized {
 }
 
 pub trait PartVectoredReadable: Sized {
-    fn from_partial_vectored<const T: usize, const E: bool>(curs: &mut VectoredCursor<'_>) -> Result<Self, WireError>;
+    fn from_vectored_part<const L: usize, const E: bool>(curs: &mut VectoredCursor<'_>) -> Result<Self, WireError>;
 }
 
 pub trait RefVectoredReadable {
-    fn ref_from_vectored<'a, const E: bool>(curs: &mut VectoredCursor<'_>, size: usize) -> Result<&'a Self, WireError>;
+    fn from_vectored_ref<'a, const E: bool>(curs: &mut VectoredCursor<'_>, size: usize) -> Result<&'a Self, WireError>;
 }
 
 /* 
@@ -75,6 +87,26 @@ impl<'a> WireCursor<'a> {
         WireCursor {
             wire: wire,
         }
+    }
+
+    pub fn get_readable<T, const E: bool>(&mut self) -> Result<T, WireError> 
+    where T: WireReadable {
+        T::from_wire::<E>(self)
+    }
+
+    pub fn get_readable_part<T, const L: usize, const E: bool>(&mut self) -> Result<T, WireError> 
+    where T: PartWireReadable {
+        T::from_wire_part::<L, E>(self)
+    }
+
+    pub fn get_readable_ref<T, const E: bool>(&mut self, length: usize) -> Result<&'a T, WireError> 
+    where T: RefWireReadable + ?Sized {
+        T::from_wire_ref(self, length)
+    }
+
+    pub fn get_readable_comp<T, const E: bool>(&mut self) -> Result<T, WireError> 
+    where T: CompWireReadable<'a> + ?Sized {
+        T::from_wire_comp::<E>(self)
     }
 
     pub fn advance(&mut self, amount: usize) -> Result<(), WireError> {
@@ -256,7 +288,7 @@ impl<'a, const E: bool> WireReader<'a, E> {
         self.curs.advance(amount)
     }
 
-    fn advance_up_to(&mut self, amount: usize) {
+    pub fn advance_up_to(&mut self, amount: usize) {
         self.curs.advance_up_to(amount)
     }
 
@@ -279,9 +311,9 @@ impl<'a, const E: bool> WireReader<'a, E> {
     }
 
     pub fn peek_sized<T>(&self, size: usize) -> Result<&'a T, WireError>
-    where T: RefWireReadable {
+    where T: RefWireReadable + ?Sized {
         let mut temp_curs = self.curs;
-        T::ref_from_wire(&mut temp_curs, size)
+        T::from_wire_ref(&mut temp_curs, size)
     }
 
     pub fn read<T>(&mut self) -> Result<T, WireError> 
@@ -304,14 +336,19 @@ impl<'a, const E: bool> WireReader<'a, E> {
         Ok(ret)
     }
 
-    pub fn read_partial<T, const L: usize>(&mut self) -> Result<T, WireError>
+    pub fn read_part<T, const L: usize>(&mut self) -> Result<T, WireError>
     where T: PartWireReadable {
-        T::from_wire_partial::<L, E>(&mut self.curs)
+        T::from_wire_part::<L, E>(&mut self.curs)
     }
 
-    pub fn read_sized<T>(&mut self, size: usize) -> Result<&'a T, WireError>
-    where T: RefWireReadable {
-        T::ref_from_wire(&mut self.curs, size)
+    pub fn read_ref<T>(&mut self, size: usize) -> Result<&'a T, WireError>
+    where T: RefWireReadable + ?Sized {
+        T::from_wire_ref(&mut self.curs, size)
+    }
+
+    pub fn read_comp<T>(&mut self) -> Result<T, WireError>
+    where T: CompWireReadable<'a> {
+        T::from_wire_comp::<E>(&mut self.curs)
     }
 
     /* 
@@ -324,8 +361,8 @@ impl<'a, const E: bool> WireReader<'a, E> {
     */
 
     pub fn read_remaining<T>(&mut self) -> Result<&'a T, WireError>
-    where T: RefWireReadable {
-        self.read_sized(self.curs.remaining())
+    where T: RefWireReadable + ?Sized {
+        self.read_ref(self.curs.remaining())
     }
 }
 
@@ -346,7 +383,7 @@ impl<'a, const E: bool> VectoredReader<'a, E> {
         self.curs.skip(amount)
     }
 
-    fn advance_up_to(&mut self, index: usize) {
+    pub fn advance_up_to(&mut self, index: usize) {
         match self.advance(index) {
             Ok(_) => (),
             Err(_) => self.curs = VectoredCursor::new(&[]) // advance() isn't guaranteed to advance cursor to end on failure (though it does right now)
@@ -374,7 +411,7 @@ impl<'a, const E: bool> VectoredReader<'a, E> {
     pub fn peek_sized<T>(&self, size: usize) -> Result<&'a T, WireError>
     where T: RefVectoredReadable {
         let mut temp_curs = self.curs;
-        T::ref_from_vectored::<E>(&mut temp_curs, size)
+        T::from_vectored_ref::<E>(&mut temp_curs, size)
     }
 
     pub fn read<T>(&mut self) -> Result<T, WireError> 
@@ -391,7 +428,7 @@ impl<'a, const E: bool> VectoredReader<'a, E> {
 
     pub fn read_partial<T, const L: usize>(&mut self) -> Result<T, WireError>
     where T: PartVectoredReadable {
-        T::from_partial_vectored::<L, E>(&mut self.curs)
+        T::from_vectored_part::<L, E>(&mut self.curs)
     }
 
     pub fn read_remaining<T>(&mut self) -> Result<&'a T, WireError>
@@ -401,7 +438,7 @@ impl<'a, const E: bool> VectoredReader<'a, E> {
 
     pub fn read_sized<T>(&mut self, size: usize) -> Result<&'a T, WireError>
     where T: RefVectoredReadable {
-        T::ref_from_vectored::<E>(&mut self.curs, size)
+        T::from_vectored_ref::<E>(&mut self.curs, size)
     }
 
     /*
@@ -426,13 +463,13 @@ impl<'a, const E: bool> VectoredReader<'a, E> {
 // Implementations of RefWireReadable for base types
 
 impl RefWireReadable for [u8] {
-    fn ref_from_wire<'a>(curs: &mut WireCursor<'a>, size: usize) -> Result<&'a Self, WireError> {
+    fn from_wire_ref<'a>(curs: &mut WireCursor<'a>, size: usize) -> Result<&'a Self, WireError> {
         curs.get(size)
     }
 }
 
 impl RefWireReadable for str {
-    fn ref_from_wire<'a>(curs: &mut WireCursor<'a>, size: usize) -> Result<&'a Self, WireError> {
+    fn from_wire_ref<'a>(curs: &mut WireCursor<'a>, size: usize) -> Result<&'a Self, WireError> {
         curs.get(size).and_then(|bytes| std::str::from_utf8(bytes).or_else(|e| Err(WireError::InvalidData(e.to_string()))))
     }
 }
@@ -459,7 +496,7 @@ macro_rules! derive_wire_readable {
 macro_rules! derive_wire_partreadable {
     ($int:ty)=> {
         impl PartWireReadable for $int {
-            fn from_wire_partial<const L: usize, const E: bool>(curs: &mut WireCursor<'_>) -> Result<Self, WireError> {
+            fn from_wire_part<const L: usize, const E: bool>(curs: &mut WireCursor<'_>) -> Result<Self, WireError> {
                 assert!(L < mem::size_of::<$int>()); // TODO: once more powerful const generic expressions are in rust, use them
                 let mut res = [0; mem::size_of::<$int>()];
                 let bytes = curs.get_array::<L>()?;
@@ -520,7 +557,7 @@ macro_rules! derive_vectored_readable {
 macro_rules! derive_vectored_partreadable {
     ($int:ty)=> {
         impl PartVectoredReadable for $int {
-            fn from_partial_vectored<const L: usize, const E: bool>(curs: &mut VectoredCursor<'_>) -> Result<Self, WireError> {
+            fn from_vectored_part<const L: usize, const E: bool>(curs: &mut VectoredCursor<'_>) -> Result<Self, WireError> {
                 assert!(L < mem::size_of::<$int>()); // TODO: once more powerful const generic expressions are in rust, use them
                 let mut res = [0; mem::size_of::<$int>()];
                 
