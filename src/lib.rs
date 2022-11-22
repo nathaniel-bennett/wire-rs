@@ -1,4 +1,4 @@
-// #![feature(array_try_from_fn)]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 mod reader;
 
@@ -9,7 +9,7 @@ pub use reader::*;
 pub enum WireError {
     InsufficientBytes,
     ExtraBytes,
-    InvalidData(String),
+    InvalidData(&'static str),
     Internal,
 }
 

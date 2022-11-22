@@ -1,5 +1,14 @@
 use crate::WireError;
-use std::{io, mem};
+use core::{mem, str};
+#[cfg(feature = "std")]
+use std::io;
+
+const UTF8_DECODE_ERROR: &'static str = "failed to decode UTF8--invalid character sequence";
+
+#[cfg(feature = "std")]
+type VectoredBuf<'a> = &'a [io::IoSlice<'a>];
+#[cfg(not(feature = "std"))]
+type VectoredBuf<'a> = &'a [&'a [u8]];
 
 pub trait WireReadable: Sized {
     fn from_wire<const E: bool>(curs: &mut WireCursor<'_>) -> Result<Self, WireError>;
@@ -49,33 +58,6 @@ pub trait PartVectoredReadable: Sized {
 pub trait RefVectoredReadable {
     fn from_vectored_ref<'a, const E: bool>(curs: &mut VectoredCursor<'_>, size: usize) -> Result<&'a Self, WireError>;
 }
-
-/* 
-pub struct VectoredSlice<'a> {
-    slices: &'a [io::IoSlice<'a>],
-    start: usize,
-    end: usize,
-}
-
-
-impl<'a> VectoredSlice<'a> {
-    pub fn new(slices: &'a [io::IoSlice<'a>]) -> Self {
-        VectoredSlice {
-            slices: slices,
-            start: 0,
-            end: slices.last().and_then(|s| Some(s.len())).unwrap_or(0),
-        }
-    }
-
-    pub fn new_subslice(slices: &'a [io::IoSlice<'a>], start: usize, end: usize) -> Self {
-        VectoredSlice {
-            slices: slices,
-            start: start,
-            end: end,
-        }
-    }
-}
-*/
 
 #[derive(Clone, Copy)]
 pub struct WireCursor<'a> {
@@ -157,12 +139,12 @@ impl<'a> WireCursor<'a> {
 
 #[derive(Clone, Copy)]
 pub struct VectoredCursor<'a> {
-    wire: &'a [io::IoSlice<'a>],
+    wire: VectoredBuf<'a>,
     idx: usize
 }
 
 impl<'a> VectoredCursor<'a> {
-    pub fn new(wire: &'a [io::IoSlice<'a>]) -> Self {
+    pub fn new(wire: VectoredBuf<'a>) -> Self {
         VectoredCursor {
             wire: wire,
             idx: 0
@@ -371,11 +353,11 @@ pub struct VectoredReader<'a, const E: bool = true> {
 }
 
 impl<'a, const E: bool> VectoredReader<'a, E> {
-    pub fn new(bytes: &'a [io::IoSlice<'a>]) -> Self {
+    pub fn new(bytes: VectoredBuf<'a>) -> Self {
         VectoredReader { curs: VectoredCursor::new(bytes) }
     }
 
-    pub fn new_with_endianness<const F: bool>(bytes: &'a [io::IoSlice<'a>]) -> VectoredReader<'a, F> {
+    pub fn new_with_endianness<const F: bool>(bytes: VectoredBuf<'a>) -> VectoredReader<'a, F> {
         VectoredReader::<F> { curs: VectoredCursor::new(bytes) }
     }
 
@@ -470,7 +452,7 @@ impl RefWireReadable for [u8] {
 
 impl RefWireReadable for str {
     fn from_wire_ref<'a>(curs: &mut WireCursor<'a>, size: usize) -> Result<&'a Self, WireError> {
-        curs.get(size).and_then(|bytes| std::str::from_utf8(bytes).or_else(|e| Err(WireError::InvalidData(e.to_string()))))
+        curs.get(size).and_then(|bytes| str::from_utf8(bytes).or_else(|_| Err(WireError::InvalidData(UTF8_DECODE_ERROR))))
     }
 }
 
