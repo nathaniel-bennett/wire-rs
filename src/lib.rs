@@ -21,7 +21,7 @@ mod tests {
     fn simple_read_finalize() {
         let bytes = [0x12, 0x34, 0x56, 0x78];
         let mut r1 = WireReader::<true>::new(&bytes);
-        
+
         let val1 = r1.read();
         let val2 = r1.read();
         let val3 = r1.read_and_finalize();
@@ -35,7 +35,7 @@ mod tests {
     fn read_finalize_insufficient_bytes() {
         let bytes = [0x12, 0x34, 0x56, 0x78];
         let mut r1 = WireReader::<true>::new(&bytes);
-        
+
         let val1 = r1.read();
         let val2 = r1.read();
         let val3: Result<u32, WireError> = r1.read_and_finalize();
@@ -63,10 +63,9 @@ mod tests {
 
         assert!(str1.is_err());
         assert!(match str1 {
-                Err(WireError::InvalidData(_)) => true,
-                _ => false,
-            }
-        );
+            Err(WireError::InvalidData(_)) => true,
+            _ => false,
+        });
     }
 
     struct CustomWireReadable<'a> {
@@ -92,7 +91,7 @@ mod tests {
     fn custom_wire_readable() {
         let bytes = [0x9a, 0x00, 0x05, 0x65, 0x66, 0x67, 0x68, 0x69];
         let c1: CustomWireReadable;
-        
+
         // c1's lifetime must be bound to `bytes`, not `r1`, so this should be able to compile
         {
             let mut r1 = WireReader::<true>::new(&bytes);
