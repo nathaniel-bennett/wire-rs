@@ -1,10 +1,17 @@
 [package]
 name = "wire-rs"
 version = "0.1.0"
+authors = ["Nathaniel Bennett <me@nathanielbennett.com>"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
 edition = "2021"
+repository = "https://github.com/nathaniel-bennett/wire-rs"
+description = "Extensible interface to convert data to/from wire protocol. Supports non-contiguous buffers (&[IoSlice]) and is compatible with no_std."
+keywords = ["encode", "iovec", "no_std", "serialization"]
+categories = ["encoding", "no-std", "rust-patterns"]
 
 [features]
-default = ["std"]
+default = []
 std = []
 
 [dependencies]
