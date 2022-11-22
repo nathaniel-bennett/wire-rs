@@ -11,7 +11,7 @@ keywords = ["encode", "iovec", "no_std", "serialization"]
 categories = ["encoding", "no-std", "rust-patterns"]
 
 [features]
-default = []
+default = ["std"]
 std = []
 
 [dependencies]
