@@ -2,7 +2,13 @@
 
 mod reader;
 
-pub use reader::*;
+pub use reader::{
+    CompWireReadable, PartVectoredReadable, PartWireReadable, RefVectoredReadable, RefWireReadable,
+    VectoredCursor, VectoredReadable, VectoredReader, WireCursor, WireReadable, WireReader,
+};
+
+use core::convert;
+use reader::*;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[non_exhaustive]
@@ -11,6 +17,29 @@ pub enum WireError {
     ExtraBytes,
     InvalidData(&'static str),
     Internal,
+}
+
+pub struct WireIndex {
+    pub vectored_idx: usize,
+    pub slice_idx: usize,
+}
+
+impl convert::From<WireReader<'_>> for WireIndex {
+    fn from(reader: WireReader<'_>) -> Self {
+        WireIndex {
+            vectored_idx: 0,
+            slice_idx: _internal_wirereader_consumed(&reader),
+        }
+    }
+}
+
+impl convert::From<VectoredReader<'_>> for WireIndex {
+    fn from(reader: VectoredReader<'_>) -> Self {
+        WireIndex {
+            vectored_idx: _internal_vectoredreader_vec_index(&reader),
+            slice_idx: _internal_vectoredreader_slice_index(&reader),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -24,7 +53,7 @@ mod tests {
 
         let val1 = r1.read();
         let val2 = r1.read();
-        let val3 = r1.read_and_finalize();
+        let val3 = WireReader::finalize_after(r1.read(), &r1);
 
         assert!(val1 == Ok(0x12u8));
         assert!(val2 == Ok(0x34u8));
@@ -38,7 +67,7 @@ mod tests {
 
         let val1 = r1.read();
         let val2 = r1.read();
-        let val3: Result<u32, WireError> = r1.read_and_finalize();
+        let val3: Result<u32, WireError> = WireReader::finalize_after(r1.read(), &r1);
 
         assert!(val1 == Ok(0x12u8));
         assert!(val2 == Ok(0x34u8));

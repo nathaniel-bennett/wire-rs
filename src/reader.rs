@@ -3,7 +3,7 @@ use core::{mem, str};
 #[cfg(feature = "std")]
 use std::io;
 
-const UTF8_DECODE_ERROR: &'static str = "failed to decode UTF8--invalid character sequence";
+const UTF8_DECODE_ERROR: &str = "failed to decode UTF8--invalid character sequence";
 
 #[cfg(feature = "std")]
 type VectoredBuf<'a> = &'a [io::IoSlice<'a>];
@@ -72,8 +72,8 @@ pub struct WireCursor<'a> {
 }
 
 impl<'a> WireCursor<'a> {
-    pub fn new(wire: &'a [u8]) -> Self {
-        WireCursor { wire: wire }
+    fn new(wire: &'a [u8]) -> Self {
+        WireCursor { wire }
     }
 
     pub fn get_readable<T, const E: bool>(&mut self) -> Result<T, WireError>
@@ -135,7 +135,7 @@ impl<'a> WireCursor<'a> {
         match (self.wire.get(0..L), self.wire.get(L..)) {
             (Some(r), Some(w)) => {
                 self.wire = w;
-                r.try_into().or_else(|_| Err(WireError::Internal))
+                r.try_into().map_err(|_| WireError::Internal)
             }
             _ => Err(WireError::InsufficientBytes),
         }
@@ -157,8 +157,8 @@ pub struct VectoredCursor<'a> {
 }
 
 impl<'a> VectoredCursor<'a> {
-    pub fn new(wire: VectoredBuf<'a>) -> Self {
-        VectoredCursor { wire: wire, idx: 0 }
+    fn new(wire: VectoredBuf<'a>) -> Self {
+        VectoredCursor { wire, idx: 0 }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -230,8 +230,7 @@ impl<'a> VectoredCursor<'a> {
             .iter()
             .map(|s| s.len())
             .sum::<usize>()
-            .checked_sub(self.idx)
-            .unwrap_or(0)
+            .saturating_sub(self.idx)
     }
 
     pub fn skip(&mut self, mut amount: usize) -> Result<(), WireError> {
@@ -270,27 +269,35 @@ impl<'a> VectoredCursor<'a> {
 
 pub struct WireReader<'a, const E: bool = true> {
     curs: WireCursor<'a>,
+    initial_len: usize,
 }
 
 impl<'a, const E: bool> WireReader<'a, E> {
     pub fn new(bytes: &'a [u8]) -> Self {
         WireReader {
             curs: WireCursor::new(bytes),
+            initial_len: bytes.len(),
         }
     }
 
     pub fn new_with_endianness<const F: bool>(bytes: &'a [u8]) -> WireReader<'a, F> {
         WireReader::<F> {
             curs: WireCursor::new(bytes),
+            initial_len: bytes.len(),
         }
     }
 
     pub fn advance(&mut self, amount: usize) -> Result<(), WireError> {
-        self.curs.advance(amount)
+        let mut temp_curs = self.curs;
+        let res = temp_curs.advance(amount);
+        if res.is_ok() {
+            self.curs = temp_curs;
+        }
+        res
     }
 
     pub fn advance_up_to(&mut self, amount: usize) {
-        self.curs.advance_up_to(amount)
+        self.curs.advance_up_to(amount);
     }
 
     pub fn finalize(&self) -> Result<(), WireError> {
@@ -299,6 +306,13 @@ impl<'a, const E: bool> WireReader<'a, E> {
         } else {
             Ok(())
         }
+    }
+
+    pub fn finalize_after<T>(action: Result<T, WireError>, reader: &Self) -> Result<T, WireError> {
+        if action.is_ok() {
+            reader.finalize()?;
+        }
+        action
     }
 
     pub fn is_empty(&self) -> bool {
@@ -325,7 +339,12 @@ impl<'a, const E: bool> WireReader<'a, E> {
     where
         T: WireReadable,
     {
-        T::from_wire::<E>(&mut self.curs)
+        let mut temp_curs = self.curs;
+        let res = T::from_wire::<E>(&mut temp_curs);
+        if res.is_ok() {
+            self.curs = temp_curs;
+        }
+        res
     }
 
     // add once array_from_wire is added
@@ -336,44 +355,41 @@ impl<'a, const E: bool> WireReader<'a, E> {
     }
     */
 
-    pub fn read_and_finalize<T>(&mut self) -> Result<T, WireError>
-    where
-        T: WireReadable,
-    {
-        let ret = self.read()?;
-        self.finalize()?;
-        Ok(ret)
-    }
-
     pub fn read_part<T, const L: usize>(&mut self) -> Result<T, WireError>
     where
         T: PartWireReadable,
     {
-        T::from_wire_part::<L, E>(&mut self.curs)
+        let mut temp_curs = self.curs;
+        let res = T::from_wire_part::<L, E>(&mut temp_curs);
+        if res.is_ok() {
+            self.curs = temp_curs;
+        }
+        res
     }
 
     pub fn read_ref<T>(&mut self, size: usize) -> Result<&'a T, WireError>
     where
         T: RefWireReadable + ?Sized,
     {
-        T::from_wire_ref(&mut self.curs, size)
+        let mut temp_curs = self.curs;
+        let res = T::from_wire_ref(&mut temp_curs, size);
+        if res.is_ok() {
+            self.curs = temp_curs;
+        }
+        res
     }
 
     pub fn read_comp<T>(&mut self) -> Result<T, WireError>
     where
         T: CompWireReadable<'a>,
     {
-        T::from_wire_comp::<E>(&mut self.curs)
+        let mut temp_curs = self.curs;
+        let res = T::from_wire_comp::<E>(&mut temp_curs);
+        if res.is_ok() {
+            self.curs = temp_curs;
+        }
+        res
     }
-
-    /*
-    pub fn read_array_and_finalize<T, const L: usize>(&mut self) -> Result<[T; L], WireError>
-    where T: WireReadable {
-        let ret = self.read_array()?;
-        self.finalize()?;
-        Ok(ret)
-    }
-    */
 
     pub fn read_remaining<T>(&mut self) -> Result<&'a T, WireError>
     where
@@ -383,20 +399,27 @@ impl<'a, const E: bool> WireReader<'a, E> {
     }
 }
 
+pub fn _internal_wirereader_consumed(reader: &WireReader<'_>) -> usize {
+    reader.initial_len - reader.curs.remaining()
+}
+
 pub struct VectoredReader<'a, const E: bool = true> {
     curs: VectoredCursor<'a>,
+    initial_slice_cnt: usize,
 }
 
 impl<'a, const E: bool> VectoredReader<'a, E> {
     pub fn new(bytes: VectoredBuf<'a>) -> Self {
         VectoredReader {
             curs: VectoredCursor::new(bytes),
+            initial_slice_cnt: bytes.len(),
         }
     }
 
     pub fn new_with_endianness<const F: bool>(bytes: VectoredBuf<'a>) -> VectoredReader<'a, F> {
         VectoredReader::<F> {
             curs: VectoredCursor::new(bytes),
+            initial_slice_cnt: bytes.len(),
         }
     }
 
@@ -417,6 +440,13 @@ impl<'a, const E: bool> VectoredReader<'a, E> {
         } else {
             Ok(())
         }
+    }
+
+    pub fn finalize_after<T>(action: Result<T, WireError>, reader: &Self) -> Result<T, WireError> {
+        if action.is_ok() {
+            reader.finalize()?;
+        }
+        action
     }
 
     pub fn is_empty(&self) -> bool {
@@ -444,15 +474,6 @@ impl<'a, const E: bool> VectoredReader<'a, E> {
         T: VectoredReadable,
     {
         T::from_vectored::<E>(&mut self.curs)
-    }
-
-    pub fn read_and_finalize<T>(&mut self) -> Result<T, WireError>
-    where
-        T: VectoredReadable,
-    {
-        let ret = self.read()?;
-        self.finalize()?;
-        Ok(ret)
     }
 
     pub fn read_partial<T, const L: usize>(&mut self) -> Result<T, WireError>
@@ -483,14 +504,15 @@ impl<'a, const E: bool> VectoredReader<'a, E> {
         self.advance_up_to(consumed);
         Ok(ret)
     }
-
-    pub fn read_array_and_finalize<T, const L: usize>(&mut self) -> Result<[T; L], WireError>
-    where T: WireReadable {
-        let ret = self.read_array()?;
-        self.finalize()?;
-        Ok(ret)
-    }
     */
+}
+
+pub fn _internal_vectoredreader_vec_index(reader: &VectoredReader<'_>) -> usize {
+    reader.initial_slice_cnt - reader.curs.wire.len()
+}
+
+pub fn _internal_vectoredreader_slice_index(reader: &VectoredReader<'_>) -> usize {
+    reader.curs.idx
 }
 
 // Implementations of RefWireReadable for base types
@@ -504,7 +526,7 @@ impl RefWireReadable for [u8] {
 impl RefWireReadable for str {
     fn from_wire_ref<'a>(curs: &mut WireCursor<'a>, size: usize) -> Result<&'a Self, WireError> {
         curs.get(size).and_then(|bytes| {
-            str::from_utf8(bytes).or_else(|_| Err(WireError::InvalidData(UTF8_DECODE_ERROR)))
+            str::from_utf8(bytes).map_err(|_| WireError::InvalidData(UTF8_DECODE_ERROR))
         })
     }
 }
