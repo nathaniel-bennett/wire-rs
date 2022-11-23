@@ -16,11 +16,13 @@ const UTF8_DECODE_ERROR: &str = "failed to decode UTF8--invalid character sequen
 const NONCONTIGUOUS_SEGMENT: &str =
     "could not get contiguous slice--data split in 2 or more segments";
 
+
 #[cfg(feature = "ioslice")]
-type VectoredBuf<'a> = &'a [io::IoSlice<'a>];
+pub type VectoredBuf<'a> = &'a [io::IoSlice<'a>];
 #[cfg(not(feature = "ioslice"))]
 pub type VectoredBuf<'a> = &'a [&'a [u8]];
 
+/// Serialization to an owned data type from the wire.
 pub trait WireReadable: Sized {
     fn from_wire<const E: bool>(curs: &mut WireCursor<'_>) -> Result<Self, WireError>;
 

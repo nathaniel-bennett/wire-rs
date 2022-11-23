@@ -1,6 +1,6 @@
 # wire-rs
 
-Extensible interface to convert data to/from wire protocols. Supports non-contiguous buffers (&[IoSlice]) and is compatible with no_std.
+Extensible interface for converting data to/from wire protocol. Supports non-contiguous buffers (including &[IoSlice]) and is no_std compatible.
 
 Documentation forthcoming
 

@@ -6,6 +6,28 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+//! Extensible interface for converting data to/from wire protocols.
+//!
+//! The purpose of this crate is to provide a simplified interface for reading to/writing from a
+//! buffer of bytes in an efficient and memory-safe way. It provides default implementations for
+//! reading/writing primitive types--integers (u8, i32, f64, etc), strings (&str) and arrays
+//! (&[u8; 3]). It also offers extensibilty to other types and more complex structs via traits
+//! ([`WireReadable`], [`WireWritable`] and their variants).
+//!
+//! In addition to supporting standard single-slice buffers, this crate provides equivalent
+//! support for non-contiguous buffers by means of types and traits prefixed with `Vectored*`.
+//! Instead of operating on a single slice (`&[u8]`), these operate on a slice of slices
+//! (`&[&[u8]]`) and transparently handle any edge cases, such as when bytes need to be read
+//! from or written to multiple slices. This can be useful in cases where it is not desirable
+//! or feasible to guarantee contiguous memory--ring buffers, two-dimensional arrays, `iovec`
+//! API calls, `PACKET_MMAP` buffers, etc.
+//!
+//! The Reader and Writer data structures exposed by this crate are effectively light-weight
+//! wrappers around slices, meaning that they can be created, copied and dropped freely with
+//! very little memory overhead.
+
+// TODO: add example use here
+
 #![cfg_attr(not(feature = "std"), no_std)]
 
 mod reader;
@@ -18,17 +40,55 @@ pub use reader::{
 use core::convert;
 use reader::*;
 
+/// An error in reading from or writing to a wire.
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[non_exhaustive]
 pub enum WireError {
+    /// Returned when a Reader or Writer contains too few remaining bytes to fully read or write
+    /// the desired type.
     InsufficientBytes,
+    /// Returned when some bytes remain on the wire after the final data type is read or written.
+    ///
+    /// The `finalize()` or `finalize_after()` methods can be used to check that all of the slice
+    /// passed into a Reader or Writer is used. This is particularly useful for wire protocols
+    /// that include a length field at the beginning of a packet that needs to be validated.
+    /// When bytes remain in a Reader or Writer and one of the above methods is called, the
+    /// `InsufficientBytes` error will be returned.
     ExtraBytes,
+    /// Returned when the type being encoded requires a particular format that the bytes on the
+    /// wire do not adhere to.
+    ///
+    /// For instance, a sequence of bytes being read in as a `str` type will result in this error
+    /// if the bytes do not contain valid UTF-8.
     InvalidData(&'static str),
+    /// An internal error in the Reader or Writer.
+    ///
+    /// This will not be raised unless there is some bug in the implementation of the Reader of
+    /// Writer, most likely caused by an invariant not holding. If encountered, this error should
+    /// be counted as a fatal error in (de/)serializing data from the wire and the Reader or
+    /// Writer that returned this error should be considered in an invalid state.
     Internal,
 }
 
+/// An index of a buffer or vectored buffers.
+///
+/// This type is created from a [`WireReader`] or [`VectoredReader`] type.
+/// Its primary use is to provide a mechanism for advancing a slice or vectored slice
+/// up by the amount read from a reader without causing any lifetime issues.
+///
+/// Both `WireReader` and `VectoredReader` carry a reference to the buffer they are reading,
+/// which means that no mutations can be performed on the referenced buffer while a Reader is
+/// in scope. Converting a reader into a `WireIndex` provides a mechanism to drop the Reader
+/// while retaining the index that the Reader had reached. Once the buffer has been mutated
+/// (e.g. additional data being written into it), a slice of the new contents (starting at the
+/// index stored in the `WireIndex`) can be used to create a new Reader. That reader can then
+/// continue to extract data from the buffer.
 pub struct WireIndex {
+    /// The index of the vectored buffer that the reader was at.
+    ///
+    /// If the given `WireIndex` was created from a `WireReader`, this value will always be set to 0.
     pub vectored_idx: usize,
+    /// The index within the buffer that the reader was at.
     pub slice_idx: usize,
 }
 
