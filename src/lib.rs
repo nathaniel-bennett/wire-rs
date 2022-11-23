@@ -11,8 +11,8 @@
 mod reader;
 
 pub use reader::{
-    CompWireReadable, PartVectoredReadable, PartWireReadable, RefVectoredReadable, RefWireReadable,
-    VectoredCursor, VectoredReadable, VectoredReader, WireCursor, WireReadable, WireReader,
+    WireReadComp, VectoredReadPart, WireReadPart, VectoredReadRef, WireReadRef,
+    VectoredCursor, VectoredRead, VectoredReader, WireCursor, WireRead, WireReader,
 };
 
 use core::convert;
@@ -197,8 +197,8 @@ mod tests {
         b: &'a str,
     }
 
-    impl<'a> CompWireReadable<'a> for CustomWireReadable<'a> {
-        fn from_wire_comp<const E: bool>(curs: &mut WireCursor<'a>) -> Result<Self, WireError> {
+    impl<'a> WireReadComp<'a> for CustomWireReadable<'a> {
+        fn read_wire_comp<const E: bool>(curs: &mut WireCursor<'a>) -> Result<Self, WireError> {
             // curs needs some stronger functionality
 
             let a = curs.get_readable::<u8, E>()?;
