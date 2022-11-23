@@ -9,14 +9,21 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 mod reader;
+mod writer;
 
 pub use reader::{
-    WireReadComp, VectoredReadPart, WireReadPart, VectoredReadRef, WireReadRef,
-    VectoredCursor, VectoredRead, VectoredReader, WireCursor, WireRead, WireReader,
+    VectoredCursor, VectoredRead, VectoredReadPart, VectoredReadRef, VectoredReader, WireCursor,
+    WireRead, WireReadComp, WireReadPart, WireReadRef, WireReader,
+};
+
+pub use writer::{
+    VectoredBufMut, VectoredCursorMut, VectoredWrite, VectoredWritePart, VectoredWriter,
+    WireCursorMut, WireWrite, WireWritePart, WireWriter,
 };
 
 use core::convert;
 use reader::*;
+use writer::*;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[non_exhaustive]
@@ -24,6 +31,7 @@ pub enum WireError {
     InsufficientBytes,
     ExtraBytes,
     InvalidData(&'static str),
+    IntegerOverflow,
     Internal,
 }
 
@@ -50,6 +58,24 @@ impl convert::From<VectoredReader<'_>> for WireIndex {
     }
 }
 
+impl convert::From<WireWriter<'_>> for WireIndex {
+    fn from(writer: WireWriter<'_>) -> Self {
+        WireIndex {
+            vectored_idx: 0,
+            slice_idx: _internal_wirewriter_consumed(&writer),
+        }
+    }
+}
+
+impl convert::From<VectoredWriter<'_>> for WireIndex {
+    fn from(writer: VectoredWriter<'_>) -> Self {
+        WireIndex {
+            vectored_idx: _internal_vectoredwriter_vec_index(&writer),
+            slice_idx: _internal_vectoredwriter_slice_index(&writer),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,7 +90,7 @@ mod tests {
     fn vectored_final_index() {
         let iovec1: [&[u8]; 3] = [&BUF1[BUF1_LEN..], &BUF1[..11], &[]];
 
-        let mut r1 = VectoredReader::<true>::new(&iovec1);
+        let mut r1 = VectoredReader::new(&iovec1);
         assert!(r1.read() == Ok(0x0001020304050607u64));
         assert!(r1.read() == Ok(0x0809i16));
         assert!(r1.read() == Ok(0x0au8));
@@ -72,7 +98,7 @@ mod tests {
         assert!(i1.vectored_idx == 1);
         assert!(i1.slice_idx == 11);
 
-        let mut r1 = VectoredReader::<true>::new(&iovec1);
+        let mut r1 = VectoredReader::new(&iovec1);
         assert!(r1.read_remaining() == Ok(&BUF1[..11]));
         let i1 = WireIndex::from(r1);
         assert!(i1.vectored_idx == 1);
@@ -82,7 +108,7 @@ mod tests {
     #[test]
     fn vectored_empty_index() {
         let iovec1: [&[u8]; 6] = [&[], &[], &BUF1[..4], &[], &BUF1[4..8], &[]];
-        let mut r1 = VectoredReader::<true>::new(&iovec1);
+        let mut r1 = VectoredReader::new(&iovec1);
         let i1 = WireIndex::from(r1);
         assert!(i1.vectored_idx == 0);
         assert!(i1.slice_idx == 0);
@@ -107,13 +133,13 @@ mod tests {
     fn vectored_wraparound_empty() {
         let iovec1: [&[u8]; 2] = [&BUF1[BUF1_LEN..], &BUF1[..11]];
 
-        let mut r1 = VectoredReader::<true>::new(&iovec1);
+        let mut r1 = VectoredReader::new(&iovec1);
         assert!(r1.read::<u128>().is_err());
         let i1 = WireIndex::from(r1);
         assert!(i1.vectored_idx == 0);
         assert!(i1.slice_idx == 0);
 
-        let mut r1 = VectoredReader::<true>::new(&iovec1);
+        let mut r1 = VectoredReader::new(&iovec1);
         assert!(r1.read::<u8>().is_ok());
         let i1 = WireIndex::from(r1);
         assert!(i1.vectored_idx == 1);
@@ -121,19 +147,19 @@ mod tests {
 
         let iovec2: [&[u8]; 2] = [&BUF1[BUF1_LEN - 4..], &BUF1[..7]];
 
-        let mut r2 = VectoredReader::<true>::new(&iovec2);
+        let mut r2 = VectoredReader::new(&iovec2);
         assert!(r2.read::<u128>().is_err());
         let i2 = WireIndex::from(r2);
         assert!(i2.vectored_idx == 0);
         assert!(i2.slice_idx == 0);
 
-        let mut r2 = VectoredReader::<true>::new(&iovec2);
+        let mut r2 = VectoredReader::new(&iovec2);
         assert!(r2.read::<u32>().is_ok());
         let i2 = WireIndex::from(r2);
         assert!(i2.vectored_idx == 0);
         assert!(i2.slice_idx == 4);
 
-        let mut r2 = VectoredReader::<true>::new(&iovec2);
+        let mut r2 = VectoredReader::new(&iovec2);
         assert!(r2.read::<u8>().is_ok());
         assert!(r2.read::<u32>().is_ok());
         let i2 = WireIndex::from(r2);
@@ -144,11 +170,12 @@ mod tests {
     #[test]
     fn simple_read_finalize() {
         let bytes = [0x12, 0x34, 0x56, 0x78];
-        let mut r1 = WireReader::<true>::new(&bytes);
+        let mut r1: WireReader = WireReader::new(&bytes);
 
         let val1 = r1.read();
         let val2 = r1.read();
         let val3 = WireReader::finalize_after(r1.read(), &r1);
+        //        let i1 = WireIndex::from(r1);
 
         assert!(val1 == Ok(0x12u8));
         assert!(val2 == Ok(0x34u8));

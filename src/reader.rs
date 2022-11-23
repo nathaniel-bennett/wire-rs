@@ -177,11 +177,12 @@ impl<'a> VectoredCursor<'a> {
     pub fn advance(&mut self, mut amount: usize) -> Result<(), WireError> {
         while let Some((first, next_slices)) = self.wire.split_first() {
             let remaining_slice_len = match first.len().checked_sub(self.idx) {
-                None | Some(0) if next_slices.is_empty() => {
-                    return Err(WireError::InsufficientBytes)
-                }
                 None | Some(0) => {
                     // Invariant: None should never occur, as the index should never exceed the bound of the first slice
+                    if next_slices.is_empty() {
+                        return Err(WireError::InsufficientBytes);
+                    }
+
                     self.wire = next_slices;
                     self.idx = 0;
                     continue;
@@ -327,13 +328,6 @@ impl<'a, const E: bool> WireReader<'a, E> {
         }
     }
 
-    pub fn new_with_endianness<const F: bool>(bytes: &'a [u8]) -> WireReader<'a, F> {
-        WireReader::<F> {
-            curs: WireCursor::new(bytes),
-            initial_len: bytes.len(),
-        }
-    }
-
     pub fn advance(&mut self, amount: usize) -> Result<(), WireError> {
         let mut temp_curs = self.curs;
         let res = temp_curs.advance(amount);
@@ -463,22 +457,6 @@ impl<'a, const E: bool> VectoredReader<'a, E> {
             initial_slice_cnt: bytes.len(),
         }
     }
-
-    /*
-    pub fn new_be(bytes: VectoredBuf<'a>) -> VectoredReader<'a, true> {
-        VectoredReader::<true> {
-            curs: VectoredCursor::new(bytes),
-            initial_slice_cnt: bytes.len(),
-        }
-    }
-
-    pub fn new_le(bytes: VectoredBuf<'a>) -> VectoredReader<'a, false> {
-        VectoredReader::<false> {
-            curs: VectoredCursor::new(bytes),
-            initial_slice_cnt: bytes.len(),
-        }
-    }
-    */
 
     pub fn advance(&mut self, amount: usize) -> Result<(), WireError> {
         let mut temp_curs = self.curs;
