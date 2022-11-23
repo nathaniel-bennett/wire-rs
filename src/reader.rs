@@ -1,14 +1,25 @@
+// Copyright (c) 2022 Nathaniel Bennett
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
 use crate::WireError;
 use core::{mem, str};
-#[cfg(feature = "std")]
+
+#[cfg(feature = "ioslice")]
 use std::io;
 
 const UTF8_DECODE_ERROR: &str = "failed to decode UTF8--invalid character sequence";
+const NONCONTIGUOUS_SEGMENT: &str =
+    "could not get contiguous slice--data split in 2 or more segments";
 
-#[cfg(feature = "std")]
+#[cfg(feature = "ioslice")]
 type VectoredBuf<'a> = &'a [io::IoSlice<'a>];
-#[cfg(not(feature = "std"))]
-type VectoredBuf<'a> = &'a [&'a [u8]];
+#[cfg(not(feature = "ioslice"))]
+pub type VectoredBuf<'a> = &'a [&'a [u8]];
 
 pub trait WireReadable: Sized {
     fn from_wire<const E: bool>(curs: &mut WireCursor<'_>) -> Result<Self, WireError>;
@@ -60,8 +71,8 @@ pub trait PartVectoredReadable: Sized {
 }
 
 pub trait RefVectoredReadable {
-    fn from_vectored_ref<'a, const E: bool>(
-        curs: &mut VectoredCursor<'_>,
+    fn from_vectored_ref<'a>(
+        curs: &mut VectoredCursor<'a>,
         size: usize,
     ) -> Result<&'a Self, WireError>;
 }
@@ -161,12 +172,77 @@ impl<'a> VectoredCursor<'a> {
         VectoredCursor { wire, idx: 0 }
     }
 
+    pub fn advance(&mut self, mut amount: usize) -> Result<(), WireError> {
+        while let Some((first, next_slices)) = self.wire.split_first() {
+            let remaining_slice_len = match first.len().checked_sub(self.idx) {
+                None | Some(0) if next_slices.is_empty() => {
+                    return Err(WireError::InsufficientBytes)
+                }
+                None | Some(0) => {
+                    // Invariant: None should never occur, as the index should never exceed the bound of the first slice
+                    self.wire = next_slices;
+                    self.idx = 0;
+                    continue;
+                }
+                Some(l) => l,
+            };
+
+            match amount.checked_sub(remaining_slice_len) {
+                None | Some(0) => {
+                    self.idx += amount; // Invariant: cannot overflow (as you cannot have a slice greater than `usize::MAX`)
+                    return Ok(());
+                }
+                Some(new_amount) => {
+                    self.wire = next_slices;
+                    self.idx = 0;
+                    amount = new_amount;
+                }
+            }
+        }
+
+        Err(WireError::InsufficientBytes)
+    }
+
+    pub fn advance_up_to(&mut self, mut amount: usize) {
+        while let Some((first, next_slices)) = self.wire.split_first() {
+            let remaining_slice_len = match first.len().checked_sub(self.idx) {
+                None | Some(0) if next_slices.is_empty() => return,
+                None | Some(0) => {
+                    // Invariant: None should never occur, as the index should never exceed the bound of the first slice
+                    self.wire = next_slices;
+                    self.idx = 0;
+                    continue;
+                }
+                Some(l) => l,
+            };
+
+            match amount.checked_sub(remaining_slice_len) {
+                Some(0) | None => {
+                    self.idx += amount; // Invariant: cannot overflow (as you cannot have a slice greater than `usize::MAX`)
+                    return;
+                }
+                Some(_) if next_slices.is_empty() => {
+                    self.idx = first.len();
+                    return;
+                }
+                Some(new_amount) => {
+                    self.wire = next_slices;
+                    self.idx = 0;
+                    amount = new_amount;
+                }
+            }
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         let mut tmp_wire = self.wire;
         let mut tmp_idx = self.idx;
         while let Some((first, next_slices)) = tmp_wire.split_first() {
             if tmp_idx < first.len() {
                 return false;
+            } else if next_slices.is_empty() {
+                // tmp_idx is already first.len()
+                return true;
             } else {
                 tmp_idx = 0;
                 tmp_wire = next_slices;
@@ -183,6 +259,7 @@ impl<'a> VectoredCursor<'a> {
                     self.idx += 1;
                     return Ok(*val);
                 }
+                None if next_slices.is_empty() => return Err(WireError::InsufficientBytes),
                 None => {
                     self.idx = 0;
                     self.wire = next_slices;
@@ -193,9 +270,9 @@ impl<'a> VectoredCursor<'a> {
         Err(WireError::InsufficientBytes)
     }
 
-    pub fn try_get(&mut self, amount: usize) -> Option<&[u8]> {
+    pub fn try_get(&mut self, amount: usize) -> Option<&'a [u8]> {
         while let Some((first, next_slices)) = self.wire.split_first() {
-            if self.idx >= first.len() {
+            if self.idx >= first.len() && !next_slices.is_empty() {
                 self.idx = 0;
                 self.wire = next_slices;
                 continue;
@@ -206,19 +283,19 @@ impl<'a> VectoredCursor<'a> {
                 None => return None, // Can't have a slice of length greater than `usize::MAX`
             };
 
-            match first.get(self.idx..end_idx) {
+            return match first.get(self.idx..end_idx) {
                 Some(slice) => {
                     self.idx += amount;
-                    return Some(slice);
+                    Some(slice)
                 }
-                None => return None,
-            }
+                None => None,
+            };
         }
 
         None
     }
 
-    pub fn try_get_array<const L: usize>(&mut self) -> Option<&[u8; L]> {
+    pub fn try_get_array<const L: usize>(&mut self) -> Option<&'a [u8; L]> {
         match self.try_get(L) {
             Some(arr) => arr.try_into().ok(), // Invariant: should always be Ok
             None => None,
@@ -232,41 +309,9 @@ impl<'a> VectoredCursor<'a> {
             .sum::<usize>()
             .saturating_sub(self.idx)
     }
-
-    pub fn skip(&mut self, mut amount: usize) -> Result<(), WireError> {
-        while let Some((first, next_slices)) = self.wire.split_first() {
-            let remaining_slice_len = match first.len().checked_sub(self.idx) {
-                None | Some(0) => {
-                    // Invariant: None should never occur, as the index should never exceed the bound of the first slice
-                    self.wire = next_slices;
-                    self.idx = 0;
-                    continue;
-                }
-                Some(l) => l,
-            };
-
-            match amount.checked_sub(remaining_slice_len) {
-                Some(0) => {
-                    self.wire = next_slices;
-                    self.idx = 0;
-                    return Ok(());
-                }
-                Some(new_amount) => {
-                    self.wire = next_slices;
-                    self.idx = 0;
-                    amount = new_amount;
-                }
-                None => {
-                    self.idx += amount; // Invariant: cannot overflow (as you cannot have a slice greater than `usize::MAX`)
-                    return Ok(());
-                }
-            }
-        }
-
-        Err(WireError::InsufficientBytes)
-    }
 }
 
+#[derive(Clone, Copy)]
 pub struct WireReader<'a, const E: bool = true> {
     curs: WireCursor<'a>,
     initial_len: usize,
@@ -403,6 +448,7 @@ pub fn _internal_wirereader_consumed(reader: &WireReader<'_>) -> usize {
     reader.initial_len - reader.curs.remaining()
 }
 
+#[derive(Clone, Copy)]
 pub struct VectoredReader<'a, const E: bool = true> {
     curs: VectoredCursor<'a>,
     initial_slice_cnt: usize,
@@ -416,29 +462,40 @@ impl<'a, const E: bool> VectoredReader<'a, E> {
         }
     }
 
-    pub fn new_with_endianness<const F: bool>(bytes: VectoredBuf<'a>) -> VectoredReader<'a, F> {
-        VectoredReader::<F> {
+    /*
+    pub fn new_be(bytes: VectoredBuf<'a>) -> VectoredReader<'a, true> {
+        VectoredReader::<true> {
             curs: VectoredCursor::new(bytes),
             initial_slice_cnt: bytes.len(),
         }
     }
 
+    pub fn new_le(bytes: VectoredBuf<'a>) -> VectoredReader<'a, false> {
+        VectoredReader::<false> {
+            curs: VectoredCursor::new(bytes),
+            initial_slice_cnt: bytes.len(),
+        }
+    }
+    */
+
     pub fn advance(&mut self, amount: usize) -> Result<(), WireError> {
-        self.curs.skip(amount)
+        let mut temp_curs = self.curs;
+        let res = temp_curs.advance(amount);
+        if res.is_ok() {
+            self.curs = temp_curs;
+        }
+        res
     }
 
     pub fn advance_up_to(&mut self, index: usize) {
-        match self.advance(index) {
-            Ok(_) => (),
-            Err(_) => self.curs = VectoredCursor::new(&[]), // advance() isn't guaranteed to advance cursor to end on failure (though it does right now)
-        }
+        self.curs.advance_up_to(index);
     }
 
     pub fn finalize(&self) -> Result<(), WireError> {
-        if !self.is_empty() {
-            Err(WireError::ExtraBytes)
-        } else {
+        if self.is_empty() {
             Ok(())
+        } else {
+            Err(WireError::ExtraBytes)
         }
     }
 
@@ -463,38 +520,53 @@ impl<'a, const E: bool> VectoredReader<'a, E> {
 
     pub fn peek_sized<T>(&self, size: usize) -> Result<&'a T, WireError>
     where
-        T: RefVectoredReadable,
+        T: RefVectoredReadable + ?Sized,
     {
         let mut temp_curs = self.curs;
-        T::from_vectored_ref::<E>(&mut temp_curs, size)
+        T::from_vectored_ref(&mut temp_curs, size)
     }
 
     pub fn read<T>(&mut self) -> Result<T, WireError>
     where
         T: VectoredReadable,
     {
-        T::from_vectored::<E>(&mut self.curs)
+        let mut temp_curs = self.curs;
+        let res = T::from_vectored::<E>(&mut temp_curs);
+        if res.is_ok() {
+            self.curs = temp_curs;
+        }
+        res
     }
 
     pub fn read_partial<T, const L: usize>(&mut self) -> Result<T, WireError>
     where
         T: PartVectoredReadable,
     {
-        T::from_vectored_part::<L, E>(&mut self.curs)
+        let mut temp_curs = self.curs;
+        let res = T::from_vectored_part::<L, E>(&mut temp_curs);
+        if res.is_ok() {
+            self.curs = temp_curs;
+        }
+        res
     }
 
     pub fn read_remaining<T>(&mut self) -> Result<&'a T, WireError>
     where
-        T: RefVectoredReadable,
+        T: RefVectoredReadable + ?Sized,
     {
         self.read_sized(self.curs.remaining())
     }
 
     pub fn read_sized<T>(&mut self, size: usize) -> Result<&'a T, WireError>
     where
-        T: RefVectoredReadable,
+        T: RefVectoredReadable + ?Sized,
     {
-        T::from_vectored_ref::<E>(&mut self.curs, size)
+        let mut temp_curs = self.curs;
+        let res = T::from_vectored_ref(&mut temp_curs, size);
+        if res.is_ok() {
+            self.curs = temp_curs;
+        }
+        res
     }
 
     /*
@@ -528,6 +600,16 @@ impl RefWireReadable for str {
         curs.get(size).and_then(|bytes| {
             str::from_utf8(bytes).map_err(|_| WireError::InvalidData(UTF8_DECODE_ERROR))
         })
+    }
+}
+
+impl RefVectoredReadable for [u8] {
+    fn from_vectored_ref<'a>(
+        curs: &mut VectoredCursor<'a>,
+        size: usize,
+    ) -> Result<&'a Self, WireError> {
+        curs.try_get(size)
+            .ok_or(WireError::InvalidData(NONCONTIGUOUS_SEGMENT))
     }
 }
 

@@ -13,5 +13,6 @@ categories = ["encoding", "no-std", "rust-patterns"]
 [features]
 default = ["std"]
 std = []
+ioslice = ["std"]
 
 [dependencies]

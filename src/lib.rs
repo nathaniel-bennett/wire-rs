@@ -1,3 +1,11 @@
+// Copyright (c) 2022 Nathaniel Bennett
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
 #![cfg_attr(not(feature = "std"), no_std)]
 
 mod reader;
@@ -45,6 +53,93 @@ impl convert::From<VectoredReader<'_>> for WireIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const BUF1_LEN: usize = 16;
+    const BUF1: [u8; BUF1_LEN] = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f,
+    ];
+
+    #[test]
+    fn vectored_final_index() {
+        let iovec1: [&[u8]; 3] = [&BUF1[BUF1_LEN..], &BUF1[..11], &[]];
+
+        let mut r1 = VectoredReader::<true>::new(&iovec1);
+        assert!(r1.read() == Ok(0x0001020304050607u64));
+        assert!(r1.read() == Ok(0x0809i16));
+        assert!(r1.read() == Ok(0x0au8));
+        let i1 = WireIndex::from(r1);
+        assert!(i1.vectored_idx == 1);
+        assert!(i1.slice_idx == 11);
+
+        let mut r1 = VectoredReader::<true>::new(&iovec1);
+        assert!(r1.read_remaining() == Ok(&BUF1[..11]));
+        let i1 = WireIndex::from(r1);
+        assert!(i1.vectored_idx == 1);
+        assert!(i1.slice_idx == 11);
+    }
+
+    #[test]
+    fn vectored_empty_index() {
+        let iovec1: [&[u8]; 6] = [&[], &[], &BUF1[..4], &[], &BUF1[4..8], &[]];
+        let mut r1 = VectoredReader::<true>::new(&iovec1);
+        let i1 = WireIndex::from(r1);
+        assert!(i1.vectored_idx == 0);
+        assert!(i1.slice_idx == 0);
+        assert!(r1.read::<i128>().is_err());
+        let i2 = WireIndex::from(r1);
+        assert!(i2.vectored_idx == 0);
+        assert!(i2.slice_idx == 0);
+        assert!(r1.read::<i32>() == Ok(0x00010203i32));
+        let i3 = WireIndex::from(r1);
+        assert!(i3.vectored_idx == 2);
+        assert!(i3.slice_idx == 4);
+
+        assert!(r1.read::<i32>() == Ok(0x04050607i32));
+        assert!(r1.finalize().is_ok());
+        let i4 = WireIndex::from(r1);
+
+        assert!(i4.vectored_idx == 4);
+        assert!(i4.slice_idx == 4);
+    }
+
+    #[test]
+    fn vectored_wraparound_empty() {
+        let iovec1: [&[u8]; 2] = [&BUF1[BUF1_LEN..], &BUF1[..11]];
+
+        let mut r1 = VectoredReader::<true>::new(&iovec1);
+        assert!(r1.read::<u128>().is_err());
+        let i1 = WireIndex::from(r1);
+        assert!(i1.vectored_idx == 0);
+        assert!(i1.slice_idx == 0);
+
+        let mut r1 = VectoredReader::<true>::new(&iovec1);
+        assert!(r1.read::<u8>().is_ok());
+        let i1 = WireIndex::from(r1);
+        assert!(i1.vectored_idx == 1);
+        assert!(i1.slice_idx == 1);
+
+        let iovec2: [&[u8]; 2] = [&BUF1[BUF1_LEN - 4..], &BUF1[..7]];
+
+        let mut r2 = VectoredReader::<true>::new(&iovec2);
+        assert!(r2.read::<u128>().is_err());
+        let i2 = WireIndex::from(r2);
+        assert!(i2.vectored_idx == 0);
+        assert!(i2.slice_idx == 0);
+
+        let mut r2 = VectoredReader::<true>::new(&iovec2);
+        assert!(r2.read::<u32>().is_ok());
+        let i2 = WireIndex::from(r2);
+        assert!(i2.vectored_idx == 0);
+        assert!(i2.slice_idx == 4);
+
+        let mut r2 = VectoredReader::<true>::new(&iovec2);
+        assert!(r2.read::<u8>().is_ok());
+        assert!(r2.read::<u32>().is_ok());
+        let i2 = WireIndex::from(r2);
+        assert!(i2.vectored_idx == 1);
+        assert!(i2.slice_idx == 1);
+    }
 
     #[test]
     fn simple_read_finalize() {
