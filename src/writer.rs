@@ -434,16 +434,6 @@ pub fn _internal_vectoredwriter_slice_index(writer: &VectoredWriter) -> usize {
     writer.curs.idx
 }
 
-// Implementations of RefWireReadable for base types
-
-/*
-impl WireWrite for [u8] {
-    fn write_wire<'a>(curs: &mut WireCursorMut<'a>, size: usize) -> Result<(), WireError> {
-        curs.get_slice(size)
-    }
-}
-*/
-
 impl WireWrite for str {
     fn write_wire<'a, const E: bool>(&self, curs: &mut WireCursorMut<'a>) -> Result<(), WireError> {
         curs.put_slice(self.as_bytes())
@@ -459,6 +449,12 @@ impl VectoredWrite for str {
     }
 }
 
+impl WireWrite for [u8] {
+    fn write_wire<'a, const E: bool>(&self, curs: &mut WireCursorMut<'a>) -> Result<(), WireError> {
+        curs.put_slice(self)
+    }
+}
+
 impl VectoredWrite for [u8] {
     fn write_vectored<'a, const E: bool>(
         &self,
@@ -467,18 +463,6 @@ impl VectoredWrite for [u8] {
         curs.put_slice(self)
     }
 }
-
-/*
-impl VectoredWrite for [u8] {
-    fn write_vectored<'a>(
-        curs: &mut VectoredCursorMut<'a>,
-        size: usize,
-    ) -> Result<&'a Self, WireError> {
-        curs.try_get(size)
-            .ok_or(WireError::InvalidData(NONCONTIGUOUS_SEGMENT))
-    }
-}
-*/
 
 macro_rules! derive_wire_writable {
     ($int:ty)=> {
@@ -505,9 +489,9 @@ macro_rules! derive_wire_partwritable {
             fn write_wire_part<const L: usize, const E: bool>(&self, curs: &mut WireCursorMut<'_>) -> Result<(), WireError> {
                 assert!(L < mem::size_of::<$int>()); // TODO: once more powerful const generic expressions are in rust, use them
                 if E {
-                    curs.put_slice(&self.to_be_bytes()[..L]) // TODO: downcast larger array to smaller one here for safety guarantees
+                    curs.put_slice(&self.to_be_bytes().get(..L).unwrap_or(&[])) // TODO: downcast larger array to smaller one here for safety guarantees
                 } else {
-                    curs.put_slice(&self.to_le_bytes()[..L])
+                    curs.put_slice(&self.to_le_bytes().get(..L).unwrap_or(&[]))
                 }
             }
         }
@@ -544,9 +528,9 @@ macro_rules! derive_vectored_partwritable {
             fn write_vectored_part<const L: usize, const E: bool>(&self, curs: &mut VectoredCursorMut<'_>) -> Result<(), WireError> {
                 assert!(L < mem::size_of::<$int>()); // TODO: once more powerful const generic expressions are in rust, use them
                 if E {
-                    curs.put_slice(&self.to_be_bytes()[..L]) // TODO: downcast larger array to smaller one here for safety guarantees
+                    curs.put_slice(&self.to_be_bytes().get(..L).unwrap_or(&[])) // TODO: downcast larger array to smaller one here for safety guarantees
                 } else {
-                    curs.put_slice(&self.to_le_bytes()[..L])
+                    curs.put_slice(&self.to_le_bytes().get(..L).unwrap_or(&[]))
                 }
             }
         }
