@@ -215,7 +215,7 @@ impl<'a> WireCursorMut<'a> {
     /// in little endian.
     pub fn put_writable<T, const E: bool>(&mut self, writable: &T) -> Result<(), WireError>
     where
-        T: WireWrite,
+        T: WireWrite + ?Sized,
     {
         writable.write_wire::<E>(self)
     }
@@ -400,7 +400,7 @@ impl<'a> VectoredCursorMut<'a> {
     /// in little endian.
     pub fn put_writable<T, const E: bool>(&mut self, writable: &T) -> Result<(), WireError>
     where
-        T: VectoredWrite,
+        T: VectoredWrite + ?Sized,
     {
         writable.write_vectored::<E>(self)
     }
@@ -494,7 +494,7 @@ impl<'a, const E: bool> WireWriter<'a, E> {
     /// Write the given data type `writable` to the wire.
     pub fn write<T>(&mut self, writable: &T) -> Result<(), WireError>
     where
-        T: WireWrite,
+        T: WireWrite + ?Sized,
     {
         let temp_idx = self.curs.idx;
         let res = writable.write_wire::<E>(&mut self.curs);
@@ -584,7 +584,7 @@ impl<'a, const E: bool> VectoredWriter<'a, E> {
     /// Write the given data type `writable` to the vectored wire.
     pub fn write<T>(&mut self, writable: &T) -> Result<(), WireError>
     where
-        T: VectoredWrite,
+        T: VectoredWrite + ?Sized,
     {
         let temp_arr_idx = self.curs.arr_idx;
         let temp_idx = self.curs.idx;
