@@ -13,7 +13,7 @@ use core::{cmp, mem, str};
 use std::io;
 
 #[cfg(feature = "ioslice")]
-type VectoredBufMut<'a> = &'a [io::IoSliceMut<'a>];
+pub type VectoredBufMut<'a> = &'a mut [io::IoSliceMut<'a>];
 #[cfg(not(feature = "ioslice"))]
 pub type VectoredBufMut<'a> = &'a mut [&'a mut [u8]];
 

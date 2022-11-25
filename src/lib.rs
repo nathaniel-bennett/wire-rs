@@ -243,6 +243,7 @@ mod tests {
         0x0f,
     ];
 
+    #[cfg(not(feature = "ioslice"))]
     #[test]
     fn vectored_final_index() {
         let iovec1: [&[u8]; 3] = [&BUF1[BUF1_LEN..], &BUF1[..11], &[]];
@@ -262,6 +263,7 @@ mod tests {
         assert!(i1.slice_idx == 11);
     }
 
+    #[cfg(not(feature = "ioslice"))]
     #[test]
     fn vectored_empty_index() {
         let iovec1: [&[u8]; 6] = [&[], &[], &BUF1[..4], &[], &BUF1[4..8], &[]];
@@ -286,6 +288,7 @@ mod tests {
         assert!(i4.slice_idx == 4);
     }
 
+    #[cfg(not(feature = "ioslice"))]
     #[test]
     fn vectored_wraparound_empty() {
         let iovec1: [&[u8]; 2] = [&BUF1[BUF1_LEN..], &BUF1[..11]];
