@@ -61,7 +61,7 @@ pub trait WireRead: Sized {
 /// would lead to the construction of an invalid instance of the object, an error will
 /// be returned instead of the object.
 pub trait WireReadComp<'a>: Sized {
-    /// Consumes a number of bytes from `curs` and returns an owned instance of the specified type,
+    /// Consumes a number of bytes from `curs` and returns an instance of the specified type,
     /// or returns a [`WireError`] on failure.
     ///
     /// The returned instance must not outlive the lifetime of the buffer that it was constructed from,
@@ -803,6 +803,12 @@ impl<'a, const E: bool> WireReader<'a, E> {
         T: WireReadRef + ?Sized,
     {
         self.read_ref(self.curs.remaining())
+    }
+}
+
+impl<'a, const E: bool> core::convert::From<WireReader<'a, E>> for &'a [u8] {
+    fn from(value: WireReader<'a, E>) -> Self {
+        value.curs.wire
     }
 }
 
